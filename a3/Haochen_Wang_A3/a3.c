@@ -1,0 +1,464 @@
+/*
+ ============================================================================
+ Name        : a3.c
+ Author      : Haochen Wang
+ Version     :
+ Copyright   : Your copyright notice
+ Description : Hello MPI World in C 
+ ============================================================================
+ */
+#include <stdio.h>
+#include <string.h>
+#include <time.h>
+#include <math.h>
+#include <stdlib.h>
+#include "mpi.h"
+
+//Create a Rain fall structure include date, location, and data
+struct Rainfall{
+	unsigned short int year;
+	unsigned short int month;
+	unsigned short int day;
+	signed short int latitude;
+	signed short int longitude;
+	float amount;
+};
+
+//Compare the two amounts
+int compareAmount(const void *a,const void *b){
+	struct Rainfall *r1=(struct Rainfall *)a;
+	struct Rainfall *r2=(struct Rainfall *)b;
+	if(r1->amount>r2->amount){
+		return 1;
+	}
+	else if(r1->amount<r2->amount){
+		return -1;
+	}
+	else
+		return 0;
+}	
+
+struct Rainfall rf;
+struct Rainfall rf1;
+int main(int argc, char* argv[]){
+    int  my_rank; /* rank of process */
+    int  p;       /* number of processes */
+    int source;   /* rank of sender */
+    int dest;     /* rank of receiver */
+    int tag=0;    /* tag for messages */
+    MPI_Status status ;   /* return status for receive */
+    const int EVENT=10000;/*number of Event*/
+    const int n=12000;/*Receive buffer size*/
+    const float AMOUNTMAX = 1000.0;/*Max Rang of amount*/
+    int i,j,k,l;
+   
+    struct Rainfall *rcvBuffer;/*1st receive buffer of Rainfall*/
+    struct Rainfall *rcvBuffer1;/*2nd receive buffer of Rainfall */
+    struct Rainfall *merge_array;/*merge buffer of Rainfall*/
+    struct Rainfall *final_array;/*final buffer of Rainfall*/
+    int spointer=0;/*pointer of in 1st time send Rainfall array*/
+    int spointer1=0;/*pointer of in 2nd time send Rainfall array*/
+    int rpointer=0;/*pointer of in 1st time receive Rainfall array*/
+    int rpointer1=0;/*pointer of in 2nd time receive Rainfall array*/
+    
+    
+    /* start up MPI */
+    MPI_Init(&argc, &argv);
+    /* find out process rank */
+    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+    /* find out number of processes */
+    MPI_Comm_size(MPI_COMM_WORLD, &p); 
+
+	/*Create my structure to a MPI Datatype*/
+    unsigned int typeCount;
+	MPI_Datatype MPI_Rain;
+	MPI_Datatype types[6]={MPI_UNSIGNED_SHORT,MPI_UNSIGNED_SHORT,MPI_UNSIGNED_SHORT,MPI_SHORT,MPI_SHORT,MPI_FLOAT};
+	MPI_Aint offset[6];
+	int blockLength[6]={1,1,1,1,1,1};
+	offset[0]=offsetof(struct Rainfall, year);
+	offset[1]=offsetof(struct Rainfall, month);
+	offset[2]=offsetof(struct Rainfall, day);
+	offset[3]=offsetof(struct Rainfall,latitude);
+	offset[4]=offsetof(struct Rainfall, longitude);
+	offset[5]=offsetof(struct Rainfall, amount);
+	MPI_Type_create_struct(6,blockLength,offset,types,&MPI_Rain);
+	MPI_Type_commit(&MPI_Rain);
+
+	
+//===============================================First====================================================	
+	//1st event array of Rainfall
+	struct Rainfall *eventArray = (struct Rainfall *) malloc (EVENT * sizeof(struct Rainfall));
+	srand(time(NULL) *my_rank);
+	for(i=0;i<EVENT;i++){
+		rf.year=rand()%46+1950;
+		rf.month=rand()%12+1;
+		rf.day=rand()%31+1;
+		rf.latitude=rand()%181+(-90);
+		rf.longitude=rand()%361+(-180);
+		rf.amount=((float)rand()/(float)RAND_MAX)*1000.0;
+		
+		eventArray[i]=rf;
+	}
+	
+	/*print all event in eventArray*/
+	/*
+	for(i=0;i<p;i++){
+		if(my_rank==i){
+			for(j=0;j<EVENT;j++){
+				printf("1process %i:%hu\t%f\n", my_rank,eventArray[j].year,eventArray[j].amount);		
+			}
+		}	
+		MPI_Barrier(MPI_COMM_WORLD);
+	}*/
+	
+	//sort Rainfall events eventArray 
+	qsort(eventArray, EVENT, sizeof(struct Rainfall), compareAmount);
+	
+	//Get 1/p of its rainfall events number
+	int *intervalCounter = malloc (p*sizeof(int));
+	int interval = AMOUNTMAX/p;
+	for(i=0;i<p;i++){
+		intervalCounter[i]=0;
+		for(j=0;j<EVENT;j++){
+			if(eventArray[j].amount>(i*interval)&&eventArray[j].amount<(i*interval+interval)){
+				intervalCounter[i]++;
+			}
+			else if(i==(p-1)&&eventArray[j].amount>=(i*interval+interval)){
+				intervalCounter[i]++;	
+			}
+		}
+		//printf("1process %i count form %i to %i, there are %i events\n", my_rank, i*interval, i*interval+interval, intervalCounter[i]);
+	}
+	
+	/*1st send and receive in all processes*/
+	rcvBuffer = (struct Rainfall*)malloc(n*sizeof(struct Rainfall));
+	int num=0;
+	for(i=0;i<p;i++){
+		for(j=0;j<p;j++){
+			if(i!=j){
+				//if i is my_rank, send to other processes amounts which are they needed rang
+				if(i==my_rank){
+					MPI_Send(&intervalCounter[j],1,MPI_INT,j,0,MPI_COMM_WORLD);
+					MPI_Send(&eventArray[spointer],intervalCounter[j],MPI_Rain,j,0,MPI_COMM_WORLD);
+					spointer=spointer+intervalCounter[j];
+					//printf("1process%i==sp==%i\n",my_rank,spointer);				
+				}
+				//if j is my_rank, receive the data from i
+				else if(j==my_rank){
+					MPI_Recv(&num,1,MPI_INT,i,0,MPI_COMM_WORLD,&status);
+					MPI_Recv(&rcvBuffer[rpointer],num,MPI_Rain,i,0,MPI_COMM_WORLD,&status);
+					rpointer=rpointer+num;
+					//printf("1process%i==rp==%i\n",my_rank,rpointer);
+				}
+				else{continue;}
+			}
+			else{
+				//if in my_rank, go to send to itself rcvBuffer
+				if(i==my_rank&&j==my_rank){
+					for(l=spointer;l<spointer+intervalCounter[my_rank];l++){
+						rcvBuffer[rpointer].year=eventArray[l].year;
+						rcvBuffer[rpointer].month=eventArray[l].month;
+           				rcvBuffer[rpointer].day=eventArray[l].day;
+           				rcvBuffer[rpointer].latitude=eventArray[l].latitude;
+           				rcvBuffer[rpointer].longitude=eventArray[l].longitude;
+            			rcvBuffer[rpointer].amount=eventArray[l].amount;
+						rpointer=rpointer+1;			
+					}
+					spointer=spointer+intervalCounter[my_rank];
+					//printf("2process%i==sp==%i\n",my_rank,spointer);
+					//printf("2process%i==rp==%i\n",my_rank,rpointer);
+				}
+				else{
+					continue;
+				}			
+			}		
+		}
+	}
+	
+	//There are some more space in receive buffer, bc i create is more bigger than Event
+	//So let i did not use part's amount number is bigger than amount rang
+	//Here i let the number is 1000000
+	for(i=0;i<n;i++){
+		if(rcvBuffer[i].year==0){
+			rcvBuffer[i].amount=1000000;		
+		}
+		else{}
+	}
+	
+	//sort Rainfall events rcvBuffer 
+	qsort(rcvBuffer, n, sizeof(struct Rainfall), compareAmount);
+	
+	/*
+	for(i=0;i<p;i++){
+		if(i==my_rank){
+			for(j=0;j<n;j++){
+				printf("1process %i:%hu\t%f\tindex::%i\n", my_rank,rcvBuffer[j].year,rcvBuffer[j].amount,j);
+			}
+		}
+		MPI_Barrier(MPI_COMM_WORLD);
+	}*/
+	/*
+	if(my_rank==1){
+			//printf("1process%i==sp==%i\n",my_rank,spointer);
+			//printf("1process%i==rp==%i\n",my_rank,rpointer);
+			for(j=0;j<n;j++){
+				printf("1process %i:%hu\t%f\tindex::%i\n", my_rank,rcvBuffer[j].year,rcvBuffer[j].amount,j);
+			}
+		}*/
+
+//===============================================Second====================================================
+	//2nd event array of Rainfall
+	struct Rainfall *eventArray1 = (struct Rainfall *) malloc (EVENT * sizeof(struct Rainfall));
+	
+	for(i=0;i<EVENT;i++){
+		rf1.year=rand()%46+1950;
+		rf1.month=rand()%12+1;
+		rf1.day=rand()%31+1;
+		rf1.latitude=rand()%181+(-90);
+		rf1.longitude=rand()%361+(-180);
+		rf1.amount=((float)rand()/(float)RAND_MAX)*1000.0;
+		
+		eventArray1[i]=rf1;
+	}
+	
+	/*print all event in eventArray*/
+	/*for(i=0;i<p;i++){
+		if(my_rank==i){
+			for(j=0;j<EVENT;j++){
+				printf("2process %i:%hu\t%f\n", my_rank,eventArray1[j].year,eventArray1[j].amount);
+			}
+		}
+		MPI_Barrier(MPI_COMM_WORLD);
+	}*/
+
+	//sort Rainfall events eventArray1 
+	qsort(eventArray1, EVENT, sizeof(struct Rainfall), compareAmount);
+	
+	//Get 1/p of its rainfall events number in each processes 
+	int *intervalCounter1 = malloc (p*sizeof(int));
+	int interval1 = AMOUNTMAX/p;
+	for(i=0;i<p;i++){
+		intervalCounter1[i]=0;
+		
+		for(j=0;j<EVENT;j++){
+			if(eventArray1[j].amount>(i*interval1)&&eventArray1[j].amount<(i*interval1+interval1)){
+				intervalCounter1[i]++;
+			}
+			else if(i==(p-1)&&eventArray1[j].amount>=(i*interval1+interval1)){
+				intervalCounter1[i]++;
+			}
+		}
+		//printf("2process %i count form %i to %i, there are %i events\n", my_rank, i*interval1, i*interval1+interval1, intervalCounter1[i]);
+	}
+
+	/*2nd send and receive in all processes*/
+	rcvBuffer1 = (struct Rainfall*)malloc(n*sizeof(struct Rainfall));
+	int num1=0;
+	for(i=0;i<p;i++){
+		for(j=0;j<p;j++){
+			if(i!=j){
+				if(i==my_rank){
+					//if i is my_rank, send to other processes amounts which are they needed rang
+					MPI_Send(&intervalCounter1[j],1,MPI_INT,j,0,MPI_COMM_WORLD);
+					MPI_Send(&eventArray1[spointer1],intervalCounter1[j],MPI_Rain,j,0,MPI_COMM_WORLD);
+					spointer1+=intervalCounter1[j];
+					//printf("1process%i==sp==%i\n",my_rank,spointer1);				
+				}
+				else if(j==my_rank){
+					//if j is my_rank, receive the data from i
+					MPI_Recv(&num1,1,MPI_INT,i,0,MPI_COMM_WORLD,&status);
+					MPI_Recv(&rcvBuffer1[rpointer1],num1,MPI_Rain,i,0,MPI_COMM_WORLD,&status);
+					rpointer1+=num1;
+					//printf("1process%i==rp==%i\n",my_rank,rpointer1);
+				}
+				else{continue;}
+			}
+			else{
+				if(i==my_rank&&j==my_rank){
+					//if in my_rank, go to send to itself rcvBuffer1
+					for(l=spointer1;l<spointer1+intervalCounter1[my_rank];l++){
+						rcvBuffer1[rpointer1].year=eventArray1[l].year;
+						rcvBuffer1[rpointer1].month=eventArray1[l].month;
+           				rcvBuffer1[rpointer1].day=eventArray1[l].day;
+           				rcvBuffer1[rpointer1].latitude=eventArray1[l].latitude;
+           				rcvBuffer1[rpointer1].longitude=eventArray1[l].longitude;
+            			rcvBuffer1[rpointer1].amount=eventArray1[l].amount;
+						rpointer1+=1;					
+					}
+					spointer1+=intervalCounter1[my_rank];
+					//printf("2process%i==sp==%i\n",my_rank,spointer1);
+					//printf("2process%i==rp==%i\n",my_rank,rpointer1);
+				}
+				else{
+					continue;
+				}			
+			}		
+		}
+	}
+	
+	//There are some more space in receive buffer, bc i create is more bigger than Event
+	//So let i did not use part's amount number is bigger than amount rang
+	//Here i let the number is 1000000
+	for(i=0;i<n;i++){
+		if(rcvBuffer1[i].year==0){
+			rcvBuffer1[i].amount=1000000;		
+		}
+		else{}
+	}
+	
+	//sort Rainfall events rcvBuffer1 
+	qsort(rcvBuffer1, n, sizeof(struct Rainfall), compareAmount);
+	
+	/*
+	for(i=0;i<p;i++){
+		if(i==my_rank){
+			for(j=0;j<n;j++){
+				//printf("2process %i:%hu\t%f\n", my_rank,rcvBuffer1[j].year,rcvBuffer1[j].amount);
+			}
+		}
+		MPI_Barrier(MPI_COMM_WORLD);
+	}*/
+	/*
+	if(my_rank==1){
+			//printf("2process%i==rp==%i\n",my_rank,rpointer1);
+			for(j=0;j<n;j++){
+				printf("2process %i:%hu\t%f\tindex::%i\n", my_rank,rcvBuffer1[j].year,rcvBuffer1[j].amount,j);
+			}
+		}*/
+
+//==================================================================merge===========================================
+	
+	merge_array =  (struct Rainfall*)malloc((rpointer+rpointer1)*sizeof(struct Rainfall));
+	
+	/*memcpy(merge_array, rcvBuffer, sizeof(struct Rainfall) * rpointer);
+	memcpy(&merge_array[rpointer], rcvBuffer1, sizeof(struct Rainfall) * rpointer1);
+	qsort(merge_array, rpointer1 + rpointer, sizeof(struct Rainfall) * (rpointer1 + rpointer), compareAmount);*/
+
+	int a=0;
+	int b=0;
+	//Compare rcvBuffer amount and rcvBuffer1 amount
+	//Send to merge_array
+	for(i=0;i<(rpointer+rpointer1);i++){
+		if(a<rpointer&&b<rpointer1){
+			if(rcvBuffer[a].amount<=rcvBuffer1[b].amount){
+				merge_array[i].year=rcvBuffer[a].year;
+				merge_array[i].month=rcvBuffer[a].month;
+        		merge_array[i].day=rcvBuffer[a].day;
+           		merge_array[i].latitude=rcvBuffer[a].latitude;
+           		merge_array[i].longitude=rcvBuffer[a].longitude;
+            	merge_array[i].amount=rcvBuffer[a].amount;	
+				a++;
+			}
+			else{
+				merge_array[i].year=rcvBuffer1[b].year;
+				merge_array[i].month=rcvBuffer1[b].month;
+				merge_array[i].day=rcvBuffer1[b].day;
+		   		merge_array[i].latitude=rcvBuffer1[b].latitude;
+		   		merge_array[i].longitude=rcvBuffer1[b].longitude;
+		    	merge_array[i].amount=rcvBuffer1[b].amount;	
+				b++;
+			}
+		}
+		else if(a>=rpointer&&b<rpointer1){
+				merge_array[i].year=rcvBuffer1[b].year;
+				merge_array[i].month=rcvBuffer1[b].month;
+				merge_array[i].day=rcvBuffer1[b].day;
+		   		merge_array[i].latitude=rcvBuffer1[b].latitude;
+		   		merge_array[i].longitude=rcvBuffer1[b].longitude;
+		    	merge_array[i].amount=rcvBuffer1[b].amount;
+				b++;
+		}
+		else if(a<rpointer&&b>=rpointer1){
+				merge_array[i].year=rcvBuffer[a].year;
+				merge_array[i].month=rcvBuffer[a].month;
+				merge_array[i].day=rcvBuffer[a].day;
+		   		merge_array[i].latitude=rcvBuffer[a].latitude;
+		   		merge_array[i].longitude=rcvBuffer[a].longitude;
+		    	merge_array[i].amount=rcvBuffer[a].amount;
+				a++;
+		}
+		else{
+
+		}
+	}
+	
+	/*
+	for(i=0;i<p;i++){
+		if(i==my_rank){
+			for(j=0;j<(rpointer+rpointer1);j++){
+				//printf("3process %i:%hu\t%f\n", my_rank,merge_array[j].year,merge_array[j].amount);
+			}
+		}
+		MPI_Barrier(MPI_COMM_WORLD);
+	}
+	*/
+	/*
+	if(my_rank==1){
+			for(j=0;j<(rpointer+rpointer1);j++){
+				printf("3process %i:%hu\t%f\tindex::%i\n", my_rank,merge_array[j].year,merge_array[j].amount,j);
+			}
+		}*/
+
+//==============================================Final================================================
+
+	int totalPointer=rpointer+rpointer1;/*Total number of each processes receive buffer's pointer*/
+	
+	final_array =  (struct Rainfall*)malloc(2*EVENT*p*sizeof(struct Rainfall));
+	
+	//If in process0
+	if(my_rank==0){
+		int totalNum=0;
+		int totalSum=0;
+		//merge_array of process0 send itself to final_array
+		for(l=0;l<totalPointer;l++){
+			final_array[l].year=eventArray1[l].year;
+			final_array[l].month=eventArray1[l].month;
+           	final_array[l].day=eventArray1[l].day;
+           	final_array[l].latitude=eventArray1[l].latitude;
+       		final_array[l].longitude=eventArray1[l].longitude;
+        	final_array[l].amount=eventArray1[l].amount;					
+		}
+		totalSum+=totalPointer;
+		//In other processes final_array receive other merge_arrays of other processes 
+		for(i=1;i<p;i++){
+			MPI_Recv(&totalNum,1,MPI_Rain,i,0,MPI_COMM_WORLD,&status);
+			MPI_Recv(&final_array[totalSum],totalNum,MPI_Rain,i,0,MPI_COMM_WORLD,&status);
+			totalSum+=totalNum;
+		}
+		
+		//Print all data in final_array
+		/*
+		for(j=0;j<2*p*EVENT;j++){
+			printf("%hu\t%hu\t%hu\t%d\t%d\t%0.2f\n",final_array[j].year,final_array[j].month,final_array[j].day,final_array[j].latitude,final_array[j].longitude,final_array[j].amount);
+		}
+		*/
+		
+		//Print the first 10 rain fall
+		printf("** Rainfall Events **\n");
+		printf("\nFirst 10:\n");
+		printf("\nYear\tMonth\tDay\tLat\tLong\tAmount\n\n");
+		for(j=0;j<10;j++){
+			printf("%hu\t%hu\t%hu\t%d\t%d\t%0.2f\tindex::%i\n",final_array[j].year,final_array[j].month,final_array[j].day,final_array[j].latitude,final_array[j].longitude,final_array[j].amount,j);
+		}
+
+		//Print the last 10 rain fall
+		printf("\n\nLast 10:\n");
+		printf("\nYear\tMonth\tDay\tLat\tLong\tAmount\n");
+		for(j=99990;j<100000;j++){
+			printf("%hu\t%hu\t%hu\t%d\t%d\t%0.2f\tindex::%i\n",final_array[j].year,final_array[j].month,final_array[j].day,final_array[j].latitude,final_array[j].longitude,final_array[j].amount,j);
+		}
+		
+		
+	}
+	//In other processes, they send merge_array to final_array of process0
+	else{
+		MPI_Send(&totalPointer,1,MPI_Rain,0,0,MPI_COMM_WORLD);
+		MPI_Send(&merge_array[0],totalPointer,MPI_Rain,0,0,MPI_COMM_WORLD);
+	}
+
+	//End of MPI
+    MPI_Finalize(); 
+    
+    
+    return 0;
+}

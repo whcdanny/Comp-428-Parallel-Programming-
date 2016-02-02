@@ -1,0 +1,63 @@
+Master process:
+  Computing matrix-vector product b = A * x.
+  The number of processes is 5.
+
+  ++ Process 0 is active ++
+
+  The number of rows is    20.
+  The number of columns is 10.
+
+Master process:
+  Vector x:
+
+0 -0.422061
+1 -0.120131
+2 0.387868
+3 0.230530
+4 -0.322253
+5 -0.322253
+6 0.230530
+7 0.387868
+8 -0.120131
+9 -0.422061
+
+  ++ Process 2 is active ++
+  -- Process 2 shutting down --
+
+  ++ Process 4 is active ++
+  -- Process 4 shutting down --
+
+  ++ Process 3 is active ++
+
+  ++ Process 1 is active ++
+  -- Process 1 shutting down --
+  -- Process 3 shutting down --
+
+Master process:
+  Product vector b = A * x
+  (Should be zero, except for a 1 in entry 16)
+
+0 -0.000000
+1 0.000000
+2 -0.000000
+3 0.000000
+4 0.000000
+5 -0.000000
+6 0.000000
+7 0.000000
+8 0.000000
+9 -0.000000
+10 -0.000000
+11 -0.000000
+12 0.000000
+13 -0.000000
+14 0.000000
+15 0.000000
+16 1.000000
+17 -0.000000
+18 0.000000
+19 -0.000000
+
+Master process:
+  Normal end of execution.
+
